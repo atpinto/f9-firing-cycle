@@ -424,13 +424,14 @@ function buildRelief(name, parent) {
     }
     const n = pos.length / 3;
     for (let k = 0; k < n; k++) { pos.push(pos[3 * k], pos[3 * k + 1], -pos[3 * k + 2]); uv.push(uv[2 * k], uv[2 * k + 1]); }
-    const front = [], back = [];
+    const front = [], back = [], edges = new Map();
     for (let j = 0; j < gh - 1; j++) for (let i = 0; i < gw - 1; i++) {
       const ka = j * gw + i, kb = ka + 1, kc = ka + gw, kd = kc + 1;
       const a = idx[ka], b = idx[kb], c3 = idx[kc], d = idx[kd];
       // the ejection port is cut out of the right-hand surface so the barrel's chamber block shows through
       const cut = name === 'slide' && (ids[ka] === 3 || ids[kb] === 3 || ids[kc] === 3 || ids[kd] === 3);
-      const tri = (p, q, r) => { if (!cut) front.push(p, q, r); back.push(r + n, q + n, p + n); };
+      const edge = (p, q) => { const key = p < q ? p * n + q : q * n + p; edges.set(key, edges.has(key) ? null : [p, q]); };
+      const tri = (p, q, r) => { if (!cut) front.push(p, q, r); back.push(r + n, q + n, p + n); edge(p, q); edge(q, r); edge(r, p); };
       const A = a >= 0, B = b >= 0, C = c3 >= 0, D = d >= 0;
       if (A && B && C && D) { tri(a, c3, b); tri(b, c3, d); }
       else if (A && B && C) tri(a, c3, b);
@@ -438,11 +439,24 @@ function buildRelief(name, parent) {
       else if (A && C && D) tri(a, c3, d);
       else if (A && B && D) tri(a, d, b);
     }
-    const geo = mesh.geometry, all = new Uint32Array(front.length + back.length); all.set(front); all.set(back, front.length);
+    // the two sides stop short of the centre plane at the outline, so close every outline (and hole) with a wall
+    // joining each boundary edge to its mirror; the wall gets its own vertices so its normals stay horizontal, and
+    // samples the photo a few pixels inside the outline so it skips the pale halo of the backdrop
+    const wall = [], IN = 5;
+    for (const e of edges.values()) {
+      if (!e) continue;
+      const [p, q] = e, w = pos.length / 3;
+      const ex = pos[3 * q] - pos[3 * p], ey = pos[3 * q + 1] - pos[3 * p + 1], el = Math.hypot(ex, ey) || 1;
+      const du = -ey / el * IN / W, dv = ex / el * IN / H; // inward = left of the edge
+      for (const v of [p, q, q + n, p + n]) { pos.push(pos[3 * v], pos[3 * v + 1], pos[3 * v + 2]); uv.push(uv[2 * v] + du, uv[2 * v + 1] + dv); }
+      wall.push(w, w + 3, w + 1, w + 1, w + 3, w + 2);
+    }
+    const geo = mesh.geometry, all = new Uint32Array(front.length + back.length + wall.length);
+    all.set(front); all.set(back, front.length); all.set(wall, front.length + back.length);
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
     geo.setIndex(new THREE.BufferAttribute(all, 1));
-    geo.addGroup(0, front.length, 0); geo.addGroup(front.length, back.length, 1);
+    geo.addGroup(0, front.length, 0); geo.addGroup(front.length, back.length, 1); geo.addGroup(front.length + back.length, wall.length, 0);
     geo.computeVertexNormals(); geo.computeBoundingSphere();
     mesh.userData.grid = { ids, gw, gh, W, H };
     if (--reliefsLeft === 0) document.getElementById('loading').hidden = true;
